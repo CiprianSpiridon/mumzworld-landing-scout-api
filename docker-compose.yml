@@ -1,0 +1,50 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ${APP_NAME:-landingscout}-app
+    ports:
+      - "${PORT:-3000}:${PORT:-3000}"
+    depends_on:
+      - db
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - APP_NAME=${APP_NAME:-landingscout}
+      - PORT=${PORT:-3000}
+      - DATABASE_HOST=db
+      - DATABASE_PORT=${DATABASE_PORT:-3306}
+      - DATABASE_USER=${DATABASE_USER:-root}
+      - DATABASE_PASSWORD=${DATABASE_PASSWORD:-root}
+      - DATABASE_NAME=${DATABASE_NAME:-landingscout}
+      - SCHEDULER_ENABLED=${SCHEDULER_ENABLED:-true}
+      - SCHEDULER_CHECK_INTERVAL=${SCHEDULER_CHECK_INTERVAL:-60000}
+      - PLAYWRIGHT_HEADLESS=${PLAYWRIGHT_HEADLESS:-true}
+      - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-30000}
+      - SCREENSHOTS_ENABLED=${SCREENSHOTS_ENABLED:-true}
+      - SCREENSHOTS_DIR=${SCREENSHOTS_DIR:-/app/screenshots}
+      - HTML_SNAPSHOT_ENABLED=${HTML_SNAPSHOT_ENABLED:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_DIR=${LOG_DIR:-/app/logs}
+    volumes:
+      - ${LOG_DIR:-./logs}:/app/logs
+      - ${SCREENSHOTS_DIR:-./screenshots}:/app/screenshots
+    restart: unless-stopped
+
+  db:
+    image: mysql:8.0
+    container_name: ${APP_NAME:-landingscout}-db
+    ports:
+      - "${DATABASE_PORT:-3306}:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD:-root}
+      - MYSQL_DATABASE=${DATABASE_NAME:-landingscout}
+      - MYSQL_USER=${DATABASE_USER:-user}
+      - MYSQL_PASSWORD=${DATABASE_PASSWORD:-root}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    command: --default-authentication-plugin=mysql_native_password
+
+volumes:
+  mysql_data: 
