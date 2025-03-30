@@ -17,6 +17,86 @@ Key features:
 - Flexible scheduling with cron expressions
 - Docker-based development and deployment
 
+## Core Functionality
+
+### Scout Configuration
+
+Scouts are the central entities in LandingScout, each configured with:
+
+- **Starting URL**: The entry point for crawling
+- **Schedule**: Cron expression for automated execution
+- **Page Types**: Definitions for different types of pages to analyze
+- **Maximum Pages**: Limit on the number of pages to visit per session
+- **Timeout**: Maximum time to spend on each page
+
+Example scout configuration:
+```json
+{
+  "name": "Homepage Scout",
+  "startUrl": "https://www.example.com/en",
+  "schedule": "0 */12 * * *",
+  "pageTypes": [
+    {
+      "type": "category",
+      "identifier": "div[id=\"category_label\"]",
+      "countSelector": "#category_label span.text-tertiary-grey"
+    },
+    {
+      "type": "collection",
+      "identifier": "main .product-listing",
+      "countSelector": ".product-count"
+    }
+  ],
+  "active": true,
+  "maxPagesToVisit": 25,
+  "timeout": 60000
+}
+```
+
+### Crawling and Link Extraction
+
+The scouting process involves:
+
+1. **Starting from the seed URL**: Each scout begins crawling from its defined starting URL
+2. **Link extraction**: Identifying and collecting all internal links on the page
+3. **URL filtering**: Applying exclusion patterns to avoid navigation, utility, and irrelevant pages
+4. **Breadth-first crawling**: Methodically visiting links and collecting more URLs as it goes
+5. **Page identification**: Determining the type of each visited page using selectors
+
+The link extractor implements sophisticated filtering to avoid non-content areas:
+- Navigation menus and headers/footers
+- Login, cart, and account pages
+- Multi-language versions of the same utility pages
+- Proper handling of relative URLs
+
+### Page Type Detection and Analysis
+
+For each visited page, LandingScout:
+
+1. **Identifies the page type**: Using CSS selectors to determine if it's a category, collection, or other page type
+2. **Extracts product counts**: Finding and parsing the total product count from the page
+3. **Fallback counting**: If a direct count isn't available, counting individual product elements
+4. **Screenshot capture**: Taking full-page screenshots organized in session-specific folders
+5. **Result storage**: Saving all relevant data, including URL, page type, product count, and processing time
+
+### Scheduling and Automation
+
+The built-in scheduler:
+
+1. **Parses cron expressions**: Converting cron syntax into scheduled execution times
+2. **Manages multiple scouts**: Running different scouts according to their schedules
+3. **Calculates next run time**: Determining and storing when each scout will run next
+4. **Handles errors gracefully**: Ensuring system stability even when individual scouts fail
+
+### Data Organization
+
+Results are organized hierarchically:
+
+1. **Scouts**: Top-level entities defining what to monitor
+2. **Sessions**: Individual scouting runs at specific times
+3. **Page Results**: Detailed information about each visited page
+4. **Screenshots**: Visual records organized by session ID and timestamp
+
 ## Data Model
 
 LandingScout uses a hierarchical data model:
