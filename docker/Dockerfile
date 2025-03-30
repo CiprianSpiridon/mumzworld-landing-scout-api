@@ -1,4 +1,23 @@
-FROM node:20-slim
+# Build Stage
+FROM node:20-slim AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN npm run build
+
+# Runtime Stage
+FROM node:20-slim AS runtime
 
 # Install dependencies for Playwright
 RUN apt-get update && apt-get install -y \
@@ -34,19 +53,21 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package files
 COPY package*.json ./
-RUN npm ci
 
-# Copy the rest of the application
-COPY . .
+# Install only production dependencies
+RUN npm ci --only=production
+
+# Install Playwright browsers
+RUN npx playwright install chromium
+
+# Copy build artifacts from the builder stage
+COPY --from=builder /app/dist ./dist
 
 # Create directories for logs and screenshots
 RUN mkdir -p /app/logs /app/screenshots \
     && chmod -R 777 /app/logs /app/screenshots
-
-# Build the application
-RUN npm run build
 
 # Set environment variables
 ENV NODE_ENV=production

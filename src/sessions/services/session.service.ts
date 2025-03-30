@@ -12,10 +12,13 @@ import { extractLinks } from '../../common/utils/link-extractor';
 import { autoScroll } from '../../common/utils/auto-scroll';
 import { ConfigService } from '../../common/config/config.service';
 import { Scout } from '../../scouts/entities/scout.entity';
+import { promises as fs } from 'fs';
+import { join } from 'path';
 
 @Injectable()
 export class SessionService {
   private readonly logger = new Logger(SessionService.name);
+  private urlQueue: Record<string, string[]> = {};
 
   constructor(
     @InjectRepository(ScoutingSession)
@@ -71,8 +74,8 @@ export class SessionService {
   async startSession(scoutId: string): Promise<ScoutingSession> {
     this.logger.log(`Starting session for scout ${scoutId}`);
 
-    // Get the scout
-    const scout = await this.scoutService.findOne(scoutId);
+    // Get the scout to validate it exists
+    await this.scoutService.findOne(scoutId);
 
     // Create a new session
     const session = this.sessionRepository.create({
@@ -85,8 +88,11 @@ export class SessionService {
     // Save the session to get an ID
     const savedSession = await this.sessionRepository.save(session);
 
+    // Initialize the URL queue for this session
+    this.urlQueue[savedSession.id] = [];
+
     // Run the session asynchronously
-    this.runSession(scout, savedSession).catch((error) => {
+    this.runSession(savedSession.id).catch((error: Error) => {
       this.logger.error(`Error during session execution: ${error.message}`);
     });
 
@@ -110,53 +116,88 @@ export class SessionService {
   }
 
   /**
-   * Execute a scouting session
+   * Main scouting session execution function.
+   * This runs in a background thread and processes URLs one by one.
    */
-  private async runSession(scout: Scout, session: ScoutingSession): Promise<void> {
-    this.logger.log(`Executing session ${session.id} for scout ${scout.id}`);
+  private async runSession(sessionId: string): Promise<void> {
+    this.logger.log(`Executing session ${sessionId}`);
     
     // Set start time
     const startTime = Date.now();
     
     try {
+      // Get the session and scout
+      const session = await this.findOne(sessionId);
+      const scout = await this.scoutService.findOne(session.scoutId);
+      
+      // Create screenshots directory for this session if needed
+      if (this.configService.areScreenshotsEnabled) {
+        await this.createSessionScreenshotsDirectory(session.id);
+      }
+      
       // Create browser and page
       const { page, context } = await this.browserService.createPage();
       
       try {
-        // Process the starting URL
-        await this.processUrl(page, scout.startUrl, session, scout);
-        
-        // Get the list of visited URLs to avoid duplicates
-        const visitedUrls = new Set<string>([scout.startUrl]);
-        
         // Navigate to the starting URL
         await page.goto(scout.startUrl, { waitUntil: 'domcontentloaded' });
         
         // Auto-scroll to load dynamic content
         await autoScroll(page);
         
+        // Process the starting URL
+        await this.processUrl(page, scout.startUrl, session, scout);
+        
+        // Get the list of visited URLs to avoid duplicates
+        const visitedUrls = new Set<string>([scout.startUrl]);
+        
         // Extract links from the page
-        const links = await extractLinks(page, scout.startUrl);
+        const links = await extractLinks(page, []);
+        
+        // Add links to the URL queue
+        this.urlQueue[sessionId] = links.filter(link => !visitedUrls.has(link));
         
         // Process each link until we reach the maximum pages to visit
         const maxPages = scout.maxPagesToVisit || 100;
-        for (const link of links) {
-          // Skip already visited URLs
-          if (visitedUrls.has(link)) {
-            continue;
-          }
-          
-          // Check if we've reached the maximum pages
-          if (visitedUrls.size >= maxPages) {
-            this.logger.log(`Reached maximum pages to visit (${maxPages})`);
+        while (
+          visitedUrls.size < maxPages && 
+          this.urlQueue[sessionId]?.length > 0
+        ) {
+          // Check if session was cancelled
+          const updatedSession = await this.findOne(sessionId);
+          if (updatedSession.status === SessionStatus.CANCELLED) {
+            session.status = SessionStatus.CANCELLED;
             break;
           }
           
+          // Get next URL from queue
+          const nextUrl = this.urlQueue[sessionId].shift();
+          if (!nextUrl) break;
+          
+          // Skip already visited URLs
+          if (visitedUrls.has(nextUrl)) {
+            continue;
+          }
+          
           // Add to visited URLs
-          visitedUrls.add(link);
+          visitedUrls.add(nextUrl);
           
           // Process the URL
-          await this.processUrl(page, link, session, scout);
+          await this.processUrl(page, nextUrl, session, scout);
+          
+          // Extract more links if needed
+          try {
+            const newLinks = await extractLinks(page, []);
+            for (const link of newLinks) {
+              if (!visitedUrls.has(link) && !this.urlQueue[sessionId].includes(link)) {
+                this.urlQueue[sessionId].push(link);
+              }
+            }
+          } catch (error) {
+            if (error instanceof Error) {
+              this.logger.warn(`Error extracting links from ${nextUrl}: ${error.message}`);
+            }
+          }
         }
         
         // Update the session status
@@ -169,21 +210,40 @@ export class SessionService {
       } finally {
         // Close the browser context
         await this.browserService.closePage(page, context);
+        
+        // Clean up the URL queue for this session
+        delete this.urlQueue[sessionId];
       }
     } catch (error) {
       // Handle session errors
+      const session = await this.findOne(sessionId);
       session.status = SessionStatus.FAILED;
       session.endTime = new Date();
-      session.errorMessage = error.message;
       
-      this.logger.error(`Session ${session.id} failed: ${error.message}`);
-    } finally {
-      // Calculate total processing time
-      const processingTime = Date.now() - startTime;
-      this.logger.log(`Session ${session.id} completed in ${processingTime}ms`);
+      if (error instanceof Error) {
+        session.errorMessage = error.message;
+        this.logger.error(`Session ${session.id} failed: ${error.message}`);
+      } else {
+        session.errorMessage = 'Unknown error';
+        this.logger.error(`Session ${session.id} failed with unknown error`);
+      }
       
       // Save the updated session
       await this.sessionRepository.save(session);
+    } finally {
+      // Calculate total processing time
+      const processingTime = Date.now() - startTime;
+      
+      // Get the session one more time to ensure we have the latest state
+      const session = await this.findOne(sessionId);
+      this.logger.log(`Session ${session.id} completed in ${processingTime}ms`);
+      
+      // Save the updated session if not already saved
+      if (session.status === SessionStatus.RUNNING) {
+        session.status = SessionStatus.COMPLETED;
+        session.endTime = new Date();
+        await this.sessionRepository.save(session);
+      }
     }
   }
 
@@ -207,42 +267,125 @@ export class SessionService {
     });
     
     try {
-      // Navigate to the URL
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: scout.timeout || 30000 });
+      this.logger.log(`Processing URL: ${url}`);
       
-      // Auto-scroll to load dynamic content
+      // Navigate to the URL
+      await page.goto(url, { 
+        waitUntil: 'domcontentloaded',
+        timeout: scout.timeout || 30000
+      });
+      
+      // Wait for content to load and scroll to load dynamic content
+      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
       await autoScroll(page);
       
-      // Identify the page type
-      const pageType = await this.processorService.identifyPageType(page, scout.pageTypes);
+      // First, identify the page type
+      const identifiedPageType = await this.processorService.identifyPageType(page, scout.pageTypes);
       
-      if (pageType) {
-        // Process the page using the appropriate processor
-        const result = await this.processorService.processPage(page, url, pageType);
+      if (identifiedPageType) {
+        // Process the page to get product count
+        const pageTypeResult = await this.processorService.processPage(
+          page, 
+          url,
+          identifiedPageType
+        );
         
-        // Update the page result with the processor result
-        Object.assign(pageResult, result);
+        if (pageTypeResult) {
+          // Found a matching page type
+          pageResult.pageType = pageTypeResult.pageType || 'UNKNOWN';
+          pageResult.productCount = pageTypeResult.productCount || 0;
+          pageResult.status = PageResultStatus.SUCCESS;
+          this.logger.log(`Found ${pageResult.productCount} products on ${url} (${pageResult.pageType})`);
+        } else {
+          // Processing failed
+          pageResult.pageType = identifiedPageType.type || 'UNKNOWN';
+          pageResult.productCount = 0;
+          pageResult.status = PageResultStatus.ERROR;
+          pageResult.errorMessage = 'Failed to process page content';
+        }
       } else {
-        // No matching page type found
+        // Unknown page type
         pageResult.pageType = 'UNKNOWN';
-        pageResult.productCount = 0;
+        pageResult.status = PageResultStatus.ERROR;
+        pageResult.errorMessage = 'Unknown page type';
       }
       
-      // Set processing time
+      // Take a screenshot if configured
+      if (this.configService.areScreenshotsEnabled) {
+        try {
+          // Create a page-specific filename with timestamp and sanitized URL
+          const timestamp = Date.now();
+          const sanitizedUrl = url.replace(/[^a-z0-9]/gi, '_').substring(0, 100);
+          const filename = `${timestamp}_${sanitizedUrl}.png`;
+          
+          // Save to the session-specific directory
+          const screenshotPath = join(this.getSessionScreenshotsDirectory(session.id), filename);
+          
+          await page.screenshot({ path: screenshotPath, fullPage: true });
+          
+          // Store relative path in the database for easier access
+          const relativeScreenshotPath = screenshotPath.replace(this.configService.screenshotsDir, '');
+          pageResult.screenshotPath = relativeScreenshotPath;
+        } catch (error) {
+          if (error instanceof Error) {
+            this.logger.warn(`Failed to take screenshot: ${error.message}`);
+          }
+        }
+      }
+      
+    } catch (error) {
+      // Handle errors during page processing
+      pageResult.status = PageResultStatus.ERROR;
+      
+      if (error instanceof Error) {
+        pageResult.errorMessage = error.message;
+        this.logger.error(`Error processing ${url}: ${error.message}`);
+      } else {
+        pageResult.errorMessage = 'Unknown error';
+        this.logger.error(`Error processing ${url}: Unknown error`);
+      }
+    } finally {
+      // Calculate processing time
       pageResult.processingTimeMs = Date.now() - startTime;
       
       // Save the page result
       return this.pageResultRepository.save(pageResult);
-    } catch (error) {
-      // Handle page processing errors
-      pageResult.status = PageResultStatus.ERROR;
-      pageResult.errorMessage = error.message;
-      pageResult.processingTimeMs = Date.now() - startTime;
-      
-      this.logger.error(`Error processing URL ${url}: ${error.message}`);
-      
-      // Save the error page result
-      return this.pageResultRepository.save(pageResult);
     }
+  }
+  
+  /**
+   * Create a directory for storing screenshots for a specific session
+   */
+  private async createSessionScreenshotsDirectory(sessionId: string): Promise<void> {
+    try {
+      const dirPath = this.getSessionScreenshotsDirectory(sessionId);
+      
+      // Create parent screenshots directory if it doesn't exist
+      await fs.mkdir(this.configService.screenshotsDir, { recursive: true });
+      
+      // Create session-specific directory
+      await fs.mkdir(dirPath, { recursive: true });
+      
+      this.logger.log(`Created screenshots directory for session ${sessionId}`);
+    } catch (error) {
+      if (error instanceof Error) {
+        this.logger.error(`Failed to create screenshots directory: ${error.message}`);
+      }
+    }
+  }
+  
+  /**
+   * Get the path to the screenshots directory for a specific session
+   */
+  private getSessionScreenshotsDirectory(sessionId: string): string {
+    return join(this.configService.screenshotsDir, sessionId);
+  }
+
+  /**
+   * Check if a URL should be skipped based on exclusion patterns
+   */
+  private shouldSkipUrl(url: string, pageTypes: any[]): boolean {
+    // Implementation based on your exclusion logic
+    return false;
   }
 } 

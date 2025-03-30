@@ -5,55 +5,74 @@ import { commonExclusions } from '../constants/exclusions';
  * Extracts links from a page, filtering out those matched by exclusion patterns.
  * 
  * @param page Playwright Page object
- * @param baseUrl Base URL for resolving relative paths
- * @param additionalExclusions Additional selectors to exclude
+ * @param additionalExclusions Additional patterns to exclude
  * @returns Array of extracted link URLs
  */
 export async function extractLinks(
   page: Page,
-  baseUrl: string,
   additionalExclusions: string[] = [],
 ): Promise<string[]> {
+  // Get all links from the page
+  const allLinks = await page.evaluate(() => {
+    const linkElements = Array.from(document.querySelectorAll('a[href]'));
+    return linkElements
+      .map((link: Element) => {
+        const href = link.getAttribute('href');
+        if (!href) return null;
+        
+        // Skip non-HTTP links, fragments, and javascript: links
+        if (
+          href.startsWith('javascript:') ||
+          href.startsWith('mailto:') ||
+          href.startsWith('tel:') ||
+          href === '#' ||
+          href.startsWith('#')
+        ) {
+          return null;
+        }
+        
+        // Use full URL from the element
+        return (link as HTMLAnchorElement).href;
+      })
+      .filter((url): url is string => url !== null);
+  });
+
   // Combine common and additional exclusions
-  const exclusions = [...commonExclusions, ...additionalExclusions];
+  const exclusionPatterns = [...commonExclusions, ...additionalExclusions];
   
-  // Create a selector that excludes all patterns
-  const excludeSelector = exclusions.map(selector => `:not(${selector})`).join('');
-  
-  // Extract all links, excluding those matching the exclusion patterns
-  const links = await page.evaluate(
-    ([excludeSelector, baseUrl]) => {
-      const linkElements = document.querySelectorAll(`${excludeSelector} a[href]`);
+  // Filter out links that match the exclusion patterns
+  const filteredLinks = allLinks.filter((url: string) => {
+    // Check if URL should be excluded
+    for (const pattern of exclusionPatterns) {
+      // Skip CSS selector patterns (they don't apply to URLs)
+      if (
+        pattern.startsWith('.') || 
+        pattern === 'nav' || 
+        pattern === 'header' || 
+        pattern === 'footer'
+      ) {
+        continue;
+      }
       
-      return Array.from(linkElements)
-        .map(link => {
-          const href = link.getAttribute('href');
-          if (!href) return null;
-          
-          // Skip non-HTTP links, fragments, and javascript: links
-          if (
-            href.startsWith('javascript:') ||
-            href.startsWith('mailto:') ||
-            href.startsWith('tel:') ||
-            href === '#' ||
-            href.startsWith('#')
-          ) {
-            return null;
-          }
-          
-          // Resolve relative URLs
-          try {
-            return new URL(href, baseUrl).href;
-          } catch (error) {
-            return null;
-          }
-        })
-        .filter(url => url !== null)
-        // Remove duplicates
-        .filter((url, index, self) => self.indexOf(url) === index);
-    },
-    [excludeSelector, baseUrl],
-  );
+      // Handle regex-like patterns with $ for end of string
+      if (pattern.endsWith('$')) {
+        const basePattern = pattern.slice(0, -1);
+        // Check if URL ends with the pattern exactly
+        const urlPath = new URL(url).pathname;
+        if (urlPath === basePattern) {
+          return false; // Exclude this URL
+        }
+      } 
+      // Regular string pattern matching
+      else if (url.includes(pattern)) {
+        return false; // Exclude this URL
+      }
+    }
+    return true; // Include this URL
+  });
   
-  return links as string[];
+  // Remove duplicates
+  const uniqueLinks = [...new Set(filteredLinks)];
+  
+  return uniqueLinks;
 } 

@@ -1,0 +1,396 @@
+openapi: 3.0.0
+info:
+  title: LandingScout API
+  description: API for managing landing page scanning operations
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000/api
+    description: Development server
+paths:
+  /scouts:
+    get:
+      summary: List all scouts
+      description: Retrieve a list of all configured scouts
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Scout'
+    post:
+      summary: Create a new scout
+      description: Create a new scout configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateScoutDto'
+      responses:
+        '201':
+          description: Scout created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scout'
+  /scouts/active:
+    get:
+      summary: List active scouts
+      description: Retrieve a list of all active scouts
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Scout'
+  /scouts/{id}:
+    get:
+      summary: Get scout by ID
+      description: Retrieve a specific scout by its ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scout'
+        '404':
+          description: Scout not found
+    patch:
+      summary: Update scout
+      description: Update an existing scout configuration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateScoutDto'
+      responses:
+        '200':
+          description: Scout updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Scout'
+        '404':
+          description: Scout not found
+    delete:
+      summary: Delete scout
+      description: Delete a scout configuration
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Scout deleted successfully
+        '404':
+          description: Scout not found
+  /sessions:
+    get:
+      summary: List all sessions
+      description: Retrieve a list of all scouting sessions
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ScoutingSession'
+  /sessions/{id}:
+    get:
+      summary: Get session by ID
+      description: Retrieve a specific scouting session by its ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoutingSession'
+        '404':
+          description: Session not found
+  /sessions/scout/{scoutId}:
+    get:
+      summary: Get sessions by scout ID
+      description: Retrieve all sessions for a specific scout
+      parameters:
+        - name: scoutId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ScoutingSession'
+  /sessions/start/{scoutId}:
+    post:
+      summary: Start a new scouting session
+      description: Start a new scouting session for the specified scout
+      parameters:
+        - name: scoutId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '201':
+          description: Session started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoutingSession'
+        '404':
+          description: Scout not found
+  /sessions/cancel/{id}:
+    post:
+      summary: Cancel a scouting session
+      description: Cancel a running scouting session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Session cancelled successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoutingSession'
+        '404':
+          description: Session not found or cannot be cancelled
+components:
+  schemas:
+    PageType:
+      type: object
+      required:
+        - type
+        - identifier
+        - countSelector
+      properties:
+        type:
+          type: string
+          description: Type of the page (e.g., category, collection)
+        identifier:
+          type: string
+          description: CSS selector to identify this page type
+        countSelector:
+          type: string
+          description: CSS selector to find the product count
+        fallbackProductSelectors:
+          type: string
+          description: Optional selectors to count products if count is not available
+    CreateScoutDto:
+      type: object
+      required:
+        - name
+        - startUrl
+        - schedule
+        - pageTypes
+      properties:
+        name:
+          type: string
+          description: Name of the scout
+        startUrl:
+          type: string
+          format: uri
+          description: URL where the scout should start scanning
+        schedule:
+          type: string
+          description: Cron schedule expression for when the scout should run
+        pageTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageType'
+          description: Array of page types to recognize and process
+        active:
+          type: boolean
+          default: true
+          description: Whether the scout is active
+        maxPagesToVisit:
+          type: integer
+          format: int32
+          description: Maximum number of pages to visit in a session
+        timeout:
+          type: integer
+          format: int32
+          description: Page timeout in milliseconds
+    UpdateScoutDto:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the scout
+        startUrl:
+          type: string
+          format: uri
+          description: URL where the scout should start scanning
+        schedule:
+          type: string
+          description: Cron schedule expression for when the scout should run
+        pageTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageType'
+          description: Array of page types to recognize and process
+        active:
+          type: boolean
+          description: Whether the scout is active
+        maxPagesToVisit:
+          type: integer
+          format: int32
+          description: Maximum number of pages to visit in a session
+        timeout:
+          type: integer
+          format: int32
+          description: Page timeout in milliseconds
+        lastRunAt:
+          type: string
+          format: date-time
+          description: When the scout was last run
+        nextRunAt:
+          type: string
+          format: date-time
+          description: When the scout will next run
+    Scout:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the scout
+        name:
+          type: string
+          description: Name of the scout
+        startUrl:
+          type: string
+          format: uri
+          description: URL where the scout should start scanning
+        schedule:
+          type: string
+          description: Cron schedule expression for when the scout should run
+        pageTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageType'
+          description: Array of page types to recognize and process
+        active:
+          type: boolean
+          description: Whether the scout is active
+        maxPagesToVisit:
+          type: integer
+          format: int32
+          description: Maximum number of pages to visit in a session
+        timeout:
+          type: integer
+          format: int32
+          description: Page timeout in milliseconds
+        lastRunAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the scout was last run
+        nextRunAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the scout will next run
+        createdAt:
+          type: string
+          format: date-time
+          description: When the scout was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the scout was last updated
+    SessionStatus:
+      type: string
+      enum:
+        - PENDING
+        - RUNNING
+        - COMPLETED
+        - FAILED
+        - TIMEOUT
+        - CANCELLED
+      description: Status of a scouting session
+    ScoutingSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the session
+        scoutId:
+          type: string
+          format: uuid
+          description: ID of the scout this session belongs to
+        startTime:
+          type: string
+          format: date-time
+          description: When the session started
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the session ended
+        totalPagesScanned:
+          type: integer
+          format: int32
+          description: Number of pages scanned in this session
+        status:
+          $ref: '#/components/schemas/SessionStatus'
+        errorMessage:
+          type: string
+          nullable: true
+          description: Error message if the session failed
+        createdAt:
+          type: string
+          format: date-time
+          description: When the session was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the session was last updated 

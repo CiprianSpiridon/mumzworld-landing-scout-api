@@ -41,10 +41,10 @@ export class CollectionProcessor implements PageProcessor {
       
       if (countElement) {
         const countText = await countElement.textContent();
-        // Extract numbers from the text (e.g., "123 Products" -> 123)
-        const match = countText?.match(/\d+/);
-        if (match) {
-          productCount = parseInt(match[0], 10);
+        // Extract numbers from text inside parentheses (e.g., "(3640)" -> 3640)
+        const match = countText?.match(/\((\d+)\)/);
+        if (match && match[1]) {
+          productCount = parseInt(match[1], 10);
         }
       } else {
         // Attempt to count products directly if no count element is found

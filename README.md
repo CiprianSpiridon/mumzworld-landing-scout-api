@@ -86,6 +86,21 @@ $ npm run docker:prod
 $ npm run docker:prod:build
 ```
 
+### Build Performance
+
+For better build performance, the project is configured to use Docker Compose with Buildx Bake. This is enabled by default in the `.env` file with:
+
+```
+COMPOSE_BAKE=true
+```
+
+This setting allows Docker Compose to delegate builds to Buildx Bake, which:
+- Uses BuildKit for faster, more efficient builds
+- Supports better caching mechanisms
+- Enables parallel building of multiple containers
+
+To disable this feature, set `COMPOSE_BAKE=false` or remove the setting from your `.env` file.
+
 ## Database Migrations
 
 LandingScout uses TypeORM migrations to manage the database schema:

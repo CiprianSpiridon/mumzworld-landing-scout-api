@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.dev
+      target: runtime
     container_name: ${APP_NAME:-landingscout}-app-dev
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
