@@ -59,7 +59,8 @@ pids
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Project specific
-/screenshots
+/screenshots/*
+!/screenshots/.gitkeep
 /mysql_data
 
 # Docker

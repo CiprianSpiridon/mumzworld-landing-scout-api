@@ -109,6 +109,31 @@ paths:
           description: Scout deleted successfully
         '404':
           description: Scout not found
+  /scouts/{id}/lastrun:
+    get:
+      summary: Get last run time of a scout
+      description: Retrieve the last time a scout was run
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lastRunAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+        '404':
+          description: Scout not found
   /sessions:
     get:
       summary: List all sessions
@@ -122,6 +147,31 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ScoutingSession'
+    post:
+      summary: Create a new session
+      description: Create a new scouting session with the specified scout ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - scoutId
+              properties:
+                scoutId:
+                  type: string
+                  format: uuid
+                  description: ID of the scout to run
+      responses:
+        '201':
+          description: Session created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoutingSession'
+        '404':
+          description: Scout not found
   /sessions/{id}:
     get:
       summary: Get session by ID
@@ -202,6 +252,127 @@ paths:
                 $ref: '#/components/schemas/ScoutingSession'
         '404':
           description: Session not found or cannot be cancelled
+  /page-results:
+    get:
+      summary: List all page results
+      description: Retrieve a list of all page results
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PageResult'
+  /page-results/{id}:
+    get:
+      summary: Get page result by ID
+      description: Retrieve a specific page result by its ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageResult'
+        '404':
+          description: Page result not found
+  /page-results/session/{sessionId}:
+    get:
+      summary: Get page results by session ID
+      description: Retrieve all page results for a specific session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PageResult'
+  /exports/sessions/{sessionId}/csv:
+    get:
+      summary: Export session results to CSV
+      description: Export page results from a specific session to CSV format
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: CSV export successful
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
+        '404':
+          description: Session not found
+  /stats/scouts/{scoutId}/trends:
+    get:
+      summary: Get product count trends for a scout
+      description: Retrieve product count trends over time for a specific scout
+      parameters:
+        - name: scoutId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 30
+          description: Number of days to include in the trend data
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scout:
+                    $ref: '#/components/schemas/Scout'
+                  trends:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          format: date
+                        totalProducts:
+                          type: integer
+                        sessionCount:
+                          type: integer
+                        pageTypes:
+                          type: object
+                          additionalProperties:
+                            type: integer
+        '404':
+          description: Scout not found
 components:
   schemas:
     PageType:
@@ -287,14 +458,6 @@ components:
           type: integer
           format: int32
           description: Page timeout in milliseconds
-        lastRunAt:
-          type: string
-          format: date-time
-          description: When the scout was last run
-        nextRunAt:
-          type: string
-          format: date-time
-          description: When the scout will next run
     Scout:
       type: object
       properties:
@@ -367,6 +530,14 @@ components:
           type: string
           format: uuid
           description: ID of the scout this session belongs to
+        scout:
+          $ref: '#/components/schemas/Scout'
+          description: The scout configuration used for this session
+        pageResults:
+          type: array
+          items:
+            $ref: '#/components/schemas/PageResult'
+          description: Results from pages visited during this session
         startTime:
           type: string
           format: date-time
@@ -393,4 +564,60 @@ components:
         updatedAt:
           type: string
           format: date-time
-          description: When the session was last updated 
+          description: When the session was last updated
+    PageResultStatus:
+      type: string
+      enum:
+        - SUCCESS
+        - ERROR
+        - TIMEOUT
+        - CANCELLED
+      description: Status of a page result
+    PageResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier for the page result
+        sessionId:
+          type: string
+          format: uuid
+          description: ID of the session this result belongs to
+        url:
+          type: string
+          format: uri
+          description: URL of the page that was scanned
+        pageType:
+          type: string
+          description: Type of the page that was detected
+        productCount:
+          type: integer
+          format: int32
+          description: Number of products found on the page
+        scanTime:
+          type: string
+          format: date-time
+          description: When the page was scanned
+        processingTimeMs:
+          type: integer
+          format: int32
+          description: Time taken to process the page in milliseconds
+        screenshotPath:
+          type: string
+          nullable: true
+          description: Path to the screenshot of the page
+        status:
+          $ref: '#/components/schemas/PageResultStatus'
+        errorMessage:
+          type: string
+          nullable: true
+          description: Error message if the page processing failed
+        createdAt:
+          type: string
+          format: date-time
+          description: When the page result was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the page result was last updated 
