@@ -45,27 +45,66 @@ Scout 2 ──┬── Session 4 ──┬── Page Result 9
 
 For detailed requirements and architecture, see [Requirements](./docs/requirements.md).
 
-## Installation
+## Setup
+
+### Environment Configuration
+
+1. Create a `.env` file based on the provided example configuration:
 
 ```bash
-# Install dependencies
-$ npm install
+# Copy the example environment file
+$ cp .env.example .env
 
-# Install Playwright browsers
-$ npx playwright install chromium
+# Edit the .env file to match your configuration
+$ nano .env
 ```
 
-## Running the app
+2. Make sure Docker and Docker Compose are installed on your system.
+
+## Running the App
+
+### Docker Development
 
 ```bash
-# development
-$ npm run start
+# Start development containers (with hot-reload)
+$ npm run docker:dev
 
-# watch mode
-$ npm run start:dev
+# Rebuild and start development containers
+$ npm run docker:dev:build
+```
 
-# production mode
-$ npm run start:prod
+### Docker Production
+
+```bash
+# Run database migrations first
+$ ./docker/migrate.sh
+
+# Start production containers
+$ npm run docker:prod
+
+# Rebuild and start production containers
+$ npm run docker:prod:build
+```
+
+## Database Migrations
+
+LandingScout uses TypeORM migrations to manage the database schema:
+
+```bash
+# Generate a new migration
+$ npm run migration:generate -- src/database/migrations/MigrationName
+
+# Run pending migrations
+$ npm run migration:run
+
+# Revert the most recent migration
+$ npm run migration:revert
+```
+
+When using Docker, run migrations using the provided script:
+
+```bash
+$ ./docker/migrate.sh
 ```
 
 ## API Endpoints
@@ -80,6 +119,19 @@ Once running, you can access the following endpoints:
 - `POST /sessions/:scoutId` - Manually run a scout
 - `GET /sessions` - Get all scouting sessions
 - `GET /sessions/:id` - Get details of a specific session
+
+## Docker Configuration
+
+### Development Environment
+- Hot-reloading enabled
+- Code changes reflect immediately
+- Source code mounted from host system
+- Debug port (9229) exposed for debugging
+
+### Production Environment
+- Optimized for deployment
+- Separate migration process for controlled database updates
+- Application built during Docker image creation
 
 ## License
 

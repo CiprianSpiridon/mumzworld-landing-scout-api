@@ -2,14 +2,15 @@ services:
   app:
     build:
       context: .
-      dockerfile: docker/Dockerfile
-    container_name: ${APP_NAME:-landingscout}-app
+      dockerfile: docker/Dockerfile.dev
+    container_name: ${APP_NAME:-landingscout}-app-dev
     ports:
       - "${PORT:-3000}:${PORT:-3000}"
+      - "9229:9229" # For debugging
     depends_on:
       - db
     environment:
-      - NODE_ENV=${NODE_ENV:-production}
+      - NODE_ENV=development
       - APP_NAME=${APP_NAME:-landingscout}
       - PORT=${PORT:-3000}
       - DATABASE_HOST=db
@@ -24,25 +25,28 @@ services:
       - SCREENSHOTS_ENABLED=${SCREENSHOTS_ENABLED:-true}
       - SCREENSHOTS_DIR=${SCREENSHOTS_DIR:-/app/screenshots}
       - HTML_SNAPSHOT_ENABLED=${HTML_SNAPSHOT_ENABLED:-true}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
       - LOG_DIR=${LOG_DIR:-/app/logs}
     volumes:
+      - .:/app:delegated
+      - /app/node_modules
       - ${LOG_DIR:-./logs}:/app/logs
       - ${SCREENSHOTS_DIR:-./screenshots}:/app/screenshots
     restart: unless-stopped
+    command: npm run start:dev
 
   db:
     image: mysql:8.0
-    container_name: ${APP_NAME:-landingscout}-db
+    container_name: ${APP_NAME:-landingscout}-db-dev
     ports:
       - "${DATABASE_PORT:-3306}:3306"
     environment:
       - MYSQL_ROOT_PASSWORD=${DATABASE_PASSWORD:-root}
       - MYSQL_DATABASE=${DATABASE_NAME:-landingscout}
     volumes:
-      - mysql_data:/var/lib/mysql
+      - mysql_data_dev:/var/lib/mysql
     restart: unless-stopped
     command: --default-authentication-plugin=mysql_native_password
 
 volumes:
-  mysql_data: 
+  mysql_data_dev: 

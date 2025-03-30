@@ -34,25 +34,21 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy package files and install dependencies
+# Copy package files
 COPY package*.json ./
-RUN npm ci
 
-# Copy the rest of the application
-COPY . .
+# Install dependencies
+RUN npm ci
 
 # Create directories for logs and screenshots
 RUN mkdir -p /app/logs /app/screenshots \
     && chmod -R 777 /app/logs /app/screenshots
 
-# Build the application
-RUN npm run build
-
 # Set environment variables
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 
-# Expose the application port
-EXPOSE 3000
+# Expose the application port and debugging port
+EXPOSE 3000 9229
 
-# Start the application
-CMD ["npm", "run", "start:prod"] 
+# Start the application in development mode
+CMD ["npm", "run", "start:dev"] 
