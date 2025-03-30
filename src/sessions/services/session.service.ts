@@ -277,7 +277,13 @@ export class SessionService {
       
       // Wait for content to load and scroll to load dynamic content
       await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-      await autoScroll(page);
+      
+      // Use longer delay for homepage (startUrl) to ensure all content loads
+      const isHomepage = url === scout.startUrl;
+      const scrollDelay = isHomepage ? 300 : 100;
+      const finalTimeout = isHomepage ? 5000 : 1000;
+      
+      await autoScroll(page, 100, scrollDelay, 50, finalTimeout);
       
       // First, identify the page type
       const identifiedPageType = await this.processorService.identifyPageType(page, scout.pageTypes);
