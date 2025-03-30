@@ -5,6 +5,7 @@ import { PageType } from '../entities/scout.entity';
 import { PageResult } from '../../sessions/entities/page-result.entity';
 import { CategoryProcessor } from './category.processor';
 import { CollectionProcessor } from './collection.processor';
+import { ProductDetailsProcessor } from './product-details.processor';
 
 /**
  * Service that manages all page type processors and delegates to the appropriate one
@@ -16,6 +17,7 @@ export class ProcessorService {
   constructor(
     private categoryProcessor: CategoryProcessor,
     private collectionProcessor: CollectionProcessor,
+    private productDetailsProcessor: ProductDetailsProcessor,
   ) {
     this.registerProcessors();
   }
@@ -26,6 +28,7 @@ export class ProcessorService {
   private registerProcessors(): void {
     this.processors.set(this.categoryProcessor.type, this.categoryProcessor);
     this.processors.set(this.collectionProcessor.type, this.collectionProcessor);
+    this.processors.set(this.productDetailsProcessor.type, this.productDetailsProcessor);
   }
 
   /**

@@ -8,12 +8,14 @@ import { Page } from 'playwright';
  * @param scrollStep Pixels to scroll each step
  * @param scrollDelay Milliseconds to wait between scroll steps
  * @param maxScrolls Maximum number of scroll steps to perform
+ * @param finalTimeout Milliseconds to wait after scrolling is complete
  */
 export async function autoScroll(
   page: Page,
   scrollStep = 100,
   scrollDelay = 100,
   maxScrolls = 50,
+  finalTimeout = 1000,
 ): Promise<void> {
   await page.evaluate(
     async ([step, delay, max]) => {
@@ -36,6 +38,6 @@ export async function autoScroll(
     [scrollStep, scrollDelay, maxScrolls],
   );
 
-  // Wait a bit after scrolling to allow any remaining dynamic content to load
-  await page.waitForTimeout(500);
+  // Wait after scrolling to allow any remaining dynamic content to load
+  await page.waitForTimeout(finalTimeout);
 } 

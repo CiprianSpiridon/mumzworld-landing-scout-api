@@ -252,12 +252,24 @@ Once running, you can access the following endpoints:
   - `GET /api/scouts/:id` - Get a specific scout
   - `PATCH /api/scouts/:id` - Update a scout
   - `DELETE /api/scouts/:id` - Delete a scout
+  - `GET /api/scouts/:id/lastrun` - Get the last run time of a scout
 
 - **Sessions Management**
+  - `POST /api/sessions` - Create a new scouting session
   - `POST /api/sessions/start/:scoutId` - Manually run a scout
   - `GET /api/sessions` - Get all scouting sessions
   - `GET /api/sessions/:id` - Get details of a specific session
   - `GET /api/sessions/scout/:scoutId` - Get sessions for a specific scout
+  - `POST /api/sessions/cancel/:id` - Cancel a running session
+
+- **Page Results**
+  - `GET /api/page-results` - Get all page results
+  - `GET /api/page-results/:id` - Get a specific page result
+  - `GET /api/page-results/session/:sessionId` - Get all results for a specific session
+
+- **Exports and Statistics**
+  - `GET /api/exports/sessions/:sessionId/csv` - Export session results to CSV
+  - `GET /api/stats/scouts/:scoutId/trends` - Get product count trends for a scout
 
 ## Docker Configuration
 
