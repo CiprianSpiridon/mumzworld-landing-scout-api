@@ -46,7 +46,7 @@ export class BrowserService implements OnModuleDestroy {
 
     return this.browser.newContext({
       userAgent: this.configService.userAgent,
-      viewport: { width: 1280, height: 720 },
+      viewport: { width: 1920, height: 1080 },
       acceptDownloads: false,
       bypassCSP: true,
       ignoreHTTPSErrors: true,

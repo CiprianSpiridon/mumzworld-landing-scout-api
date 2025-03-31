@@ -24,26 +24,37 @@ export class ProductDetailsProcessor implements PageProcessor {
         const count = await page.locator(pageType.identifier).count();
         if (count > 0) return true;
       }
-      
+
       // Multiple checks to identify product pages
       const checks = [
         // Check for product name heading with ProductDetails_productName class
-        page.locator('h1[class*="ProductDetails_productName"]').count().then(count => count > 0),
-        
+        page
+          .locator('h1[class*="ProductDetails_productName"]')
+          .count()
+          .then((count) => count > 0),
+
         // Check for Add to Cart button
-        page.locator('button[title="Add to Cart"]').count().then(count => count > 0),
-        
+        page
+          .locator('button[title="Add to Cart"]')
+          .count()
+          .then((count) => count > 0),
+
         // Check for product gallery
-        page.locator('div.product-gallery, div[class*="ProductGallery"]').count().then(count => count > 0)
+        page
+          .locator('div.product-gallery, div[class*="ProductGallery"]')
+          .count()
+          .then((count) => count > 0),
       ];
-      
+
       // If at least 2 checks pass, consider it a product page
       const results = await Promise.all(checks);
-      const passedChecks = results.filter(result => result).length;
-      
+      const passedChecks = results.filter((result) => result).length;
+
       return passedChecks >= 2;
     } catch (error) {
-      console.error(`Error identifying product detail page: ${error instanceof Error ? error.message : 'unknown error'}`);
+      console.error(
+        `Error identifying product detail page: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
       return false;
     }
   }
@@ -52,11 +63,15 @@ export class ProductDetailsProcessor implements PageProcessor {
    * Process a product detail page
    * Sets product count to 1 if Add to Cart button exists (in stock), otherwise 0
    */
-  async process(page: Page, url: string, pageType: PageType): Promise<Partial<PageResult>> {
+  async process(
+    page: Page,
+    url: string,
+    pageType: PageType,
+  ): Promise<Partial<PageResult>> {
     try {
       // Ensure content is fully loaded
       await autoScroll(page);
-      
+
       // Try to find product name for logging purposes
       let productName = 'Unknown Product';
       try {
@@ -67,34 +82,40 @@ export class ProductDetailsProcessor implements PageProcessor {
       } catch (e) {
         // Silently fail if we can't get the product name
       }
-      
+
       // Check if Add to Cart button exists (indicating product is in stock)
       let inStock = false;
-      
+
       // Use provided selector if available, otherwise use default
       const selector = pageType.countSelector || 'button[title="Add to Cart"]';
-      
+
       try {
         // Check for the Add to Cart button
         inStock = (await page.locator(selector).count()) > 0;
-        
+
         // Log the result for debugging
-        console.log(`Product: ${productName}, Add to Cart button found: ${inStock ? 'Yes' : 'No'}`);
+        console.log(
+          `Product: ${productName}, Add to Cart button found: ${inStock ? 'Yes' : 'No'}`,
+        );
       } catch (buttonError) {
-        console.error(`Error checking Add to Cart button: ${buttonError instanceof Error ? buttonError.message : 'unknown error'}`);
+        console.error(
+          `Error checking Add to Cart button: ${buttonError instanceof Error ? buttonError.message : 'unknown error'}`,
+        );
         inStock = false;
       }
-      
+
       // Set product count to 1 if in stock, otherwise 0
       const productCount = inStock ? 1 : 0;
-      
+
       return {
         pageType: this.type,
         productCount,
         status: PageResultStatus.SUCCESS,
       };
     } catch (error) {
-      console.error(`Error processing product detail page: ${error instanceof Error ? error.message : 'unknown error'}`);
+      console.error(
+        `Error processing product detail page: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
       return {
         pageType: this.type,
         productCount: 0,
@@ -103,4 +124,4 @@ export class ProductDetailsProcessor implements PageProcessor {
       };
     }
   }
-} 
+}

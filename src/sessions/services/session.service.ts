@@ -201,7 +201,12 @@ export class SessionService {
           
           // Process the URL - wrap in try/catch to continue even if one URL fails
           try {
-            await this.processUrl(page, nextUrl, session, scout);
+            const result = await this.processUrl(page, nextUrl, session, scout);
+            // If a new page and context were created in processUrl, update our references
+            if (result.newPage) {
+              page = result.newPage;
+              context = result.newContext;
+            }
           } catch (urlError) {
             this.logger.error(`Failed to process URL ${nextUrl}: ${urlError instanceof Error ? urlError.message : 'unknown error'}`);
             // Continue with next URL
@@ -227,6 +232,9 @@ export class SessionService {
         session.status = SessionStatus.COMPLETED;
         session.endTime = new Date();
         session.totalPagesScanned = visitedUrls.size;
+        
+        // Save the updated session
+        await this.sessionRepository.save(session);
         
         // Update the scout's last run time
         await this.scoutService.updateLastRun(scout.id);
@@ -289,8 +297,10 @@ export class SessionService {
     url: string,
     session: ScoutingSession,
     scout: Scout,
-  ): Promise<PageResult> {
+  ): Promise<PageResult & { newPage?: any; newContext?: any }> {
     const startTime = Date.now();
+    let context: any = null;
+    let createdNewPage = false;
     
     // Create a page result entry
     const pageResult = this.pageResultRepository.create({
@@ -308,8 +318,9 @@ export class SessionService {
           this.logger.warn(`Page is closed, creating a new one for session ${session.id}`);
           
           let browser = await this.browserService.createPage();
-           page = browser.page;
-          // context = browser.context;
+          page = browser.page;
+          context = browser.context;
+          createdNewPage = true;
       }
       
       // Navigate to the URL with better error handling
@@ -322,6 +333,10 @@ export class SessionService {
         this.logger.error(`Navigation error for ${url}: ${navError.message}`);
         pageResult.status = PageResultStatus.ERROR;
         pageResult.errorMessage = `Navigation failed: ${navError.message}`;
+        
+        if (createdNewPage) {
+          return Object.assign(pageResult, { newPage: page, newContext: context });
+        }
         return pageResult;
       }
       
@@ -411,8 +426,12 @@ export class SessionService {
       // Calculate processing time
       pageResult.processingTimeMs = Date.now() - startTime;
       
-      // Save the page result
-      return this.pageResultRepository.save(pageResult);
+      // Save the page result and return with the new page/context if created
+      const savedResult = await this.pageResultRepository.save(pageResult);
+      if (createdNewPage) {
+        return Object.assign(savedResult, { newPage: page, newContext: context });
+      }
+      return savedResult;
     }
   }
   
