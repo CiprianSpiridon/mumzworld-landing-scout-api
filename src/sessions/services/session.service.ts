@@ -172,11 +172,12 @@ export class SessionService {
         // Add links to the URL queue
         this.urlQueue[sessionId] = links.filter(
           (link) => !visitedUrls.has(link),
-        
+        );
+
         // Process each link until we reach the maximum pages to visit
         const maxPages = scout.maxPagesToVisit || 100;
         while (
-          visitedUrls.size < maxPages && 
+          visitedUrls.size < maxPages &&
           this.urlQueue[sessionId]?.length > 0
         ) {
           // Check if session was cancelled
@@ -304,7 +305,11 @@ export class SessionService {
       
       // Check if the page is still valid before continuing
       if (!page || page.isClosed?.()) {
-        throw new Error('Page is already closed');
+          this.logger.warn(`Page is closed, creating a new one for session ${session.id}`);
+          
+          let browser = await this.browserService.createPage();
+           page = browser.page;
+          // context = browser.context;
       }
       
       // Navigate to the URL with better error handling
