@@ -105,7 +105,10 @@ export class SessionService {
   async cancelSession(id: string): Promise<ScoutingSession> {
     const session = await this.findOne(id);
 
-    if (session.status !== SessionStatus.RUNNING && session.status !== SessionStatus.PENDING) {
+    if (
+      session.status !== SessionStatus.RUNNING &&
+      session.status !== SessionStatus.PENDING
+    ) {
       throw new Error(`Session is not running or pending, cannot cancel`);
     }
 
@@ -121,41 +124,54 @@ export class SessionService {
    */
   private async runSession(sessionId: string): Promise<void> {
     this.logger.log(`Executing session ${sessionId}`);
-    
+
     // Set start time
     const startTime = Date.now();
-    
+    let page: any = null;
+    let context: any = null;
+
     try {
       // Get the session and scout
       const session = await this.findOne(sessionId);
       const scout = await this.scoutService.findOne(session.scoutId);
-      
+
       // Create screenshots directory for this session if needed
       if (this.configService.areScreenshotsEnabled) {
         await this.createSessionScreenshotsDirectory(session.id);
       }
-      
+
       // Create browser and page
-      const { page, context } = await this.browserService.createPage();
-      
+      try {
+        const browser = await this.browserService.createPage();
+        page = browser.page;
+        context = browser.context;
+      } catch (browserError) {
+        throw new Error(`Failed to create browser: ${browserError instanceof Error ? browserError.message : 'unknown error'}`);
+      }
+
+      if (!page) {
+        throw new Error('Failed to create browser page');
+      }
+
       try {
         // Navigate to the starting URL
         await page.goto(scout.startUrl, { waitUntil: 'domcontentloaded' });
-        
+
         // Auto-scroll to load dynamic content
         await autoScroll(page);
-        
+
         // Process the starting URL
         await this.processUrl(page, scout.startUrl, session, scout);
-        
+
         // Get the list of visited URLs to avoid duplicates
         const visitedUrls = new Set<string>([scout.startUrl]);
-        
+
         // Extract links from the page
         const links = await extractLinks(page, []);
-        
+
         // Add links to the URL queue
-        this.urlQueue[sessionId] = links.filter(link => !visitedUrls.has(link));
+        this.urlQueue[sessionId] = links.filter(
+          (link) => !visitedUrls.has(link),
         
         // Process each link until we reach the maximum pages to visit
         const maxPages = scout.maxPagesToVisit || 100;
@@ -182,8 +198,14 @@ export class SessionService {
           // Add to visited URLs
           visitedUrls.add(nextUrl);
           
-          // Process the URL
-          await this.processUrl(page, nextUrl, session, scout);
+          // Process the URL - wrap in try/catch to continue even if one URL fails
+          try {
+            await this.processUrl(page, nextUrl, session, scout);
+          } catch (urlError) {
+            this.logger.error(`Failed to process URL ${nextUrl}: ${urlError instanceof Error ? urlError.message : 'unknown error'}`);
+            // Continue with next URL
+            continue;
+          }
           
           // Extract more links if needed
           try {
@@ -208,8 +230,15 @@ export class SessionService {
         // Update the scout's last run time
         await this.scoutService.updateLastRun(scout.id);
       } finally {
-        // Close the browser context
-        await this.browserService.closePage(page, context);
+        // Add a small delay before closing the browser to ensure all operations complete
+        try {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          if (page && context) {
+            await this.browserService.closePage(page, context);
+          }
+        } catch (closeError) {
+          this.logger.warn(`Error closing browser: ${closeError instanceof Error ? closeError.message : 'unknown error'}`);
+        }
         
         // Clean up the URL queue for this session
         delete this.urlQueue[sessionId];
@@ -235,14 +264,18 @@ export class SessionService {
       const processingTime = Date.now() - startTime;
       
       // Get the session one more time to ensure we have the latest state
-      const session = await this.findOne(sessionId);
-      this.logger.log(`Session ${session.id} completed in ${processingTime}ms`);
-      
-      // Save the updated session if not already saved
-      if (session.status === SessionStatus.RUNNING) {
-        session.status = SessionStatus.COMPLETED;
-        session.endTime = new Date();
-        await this.sessionRepository.save(session);
+      try {
+        const session = await this.findOne(sessionId);
+        this.logger.log(`Session ${session.id} completed in ${processingTime}ms`);
+        
+        // Save the updated session if not already saved
+        if (session.status === SessionStatus.RUNNING) {
+          session.status = SessionStatus.COMPLETED;
+          session.endTime = new Date();
+          await this.sessionRepository.save(session);
+        }
+      } catch (finalError) {
+        this.logger.error(`Error in session cleanup: ${finalError instanceof Error ? finalError.message : 'unknown error'}`);
       }
     }
   }
@@ -269,21 +302,40 @@ export class SessionService {
     try {
       this.logger.log(`Processing URL: ${url}`);
       
-      // Navigate to the URL
-      await page.goto(url, { 
-        waitUntil: 'domcontentloaded',
-        timeout: scout.timeout || 30000
-      });
+      // Check if the page is still valid before continuing
+      if (!page || page.isClosed?.()) {
+        throw new Error('Page is already closed');
+      }
+      
+      // Navigate to the URL with better error handling
+      try {
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout: scout.timeout || 30000
+        });
+      } catch (navError) {
+        this.logger.error(`Navigation error for ${url}: ${navError.message}`);
+        pageResult.status = PageResultStatus.ERROR;
+        pageResult.errorMessage = `Navigation failed: ${navError.message}`;
+        return pageResult;
+      }
       
       // Wait for content to load and scroll to load dynamic content
-      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
+          this.logger.warn(`Network idle timeout for ${url}`);
+        });
       
-      // Use longer delay for homepage (startUrl) to ensure all content loads
-      const isHomepage = url === scout.startUrl;
-      const scrollDelay = isHomepage ? 300 : 100;
-      const finalTimeout = isHomepage ? 5000 : 1000;
+        // Use longer delay for homepage (startUrl) to ensure all content loads
+        const isHomepage = url === scout.startUrl;
+        const scrollDelay = isHomepage ? 500 : 100;
+        const finalTimeout = isHomepage ? 10000 : 1000;
       
-      await autoScroll(page, 100, scrollDelay, 50, finalTimeout);
+        await autoScroll(page, 100, scrollDelay, 50, finalTimeout);
+      } catch (loadError) {
+        this.logger.warn(`Content loading error for ${url}: ${loadError.message}`);
+        // Continue despite this error - we might still be able to extract information
+      }
       
       // First, identify the page type
       const identifiedPageType = await this.processorService.identifyPageType(page, scout.pageTypes);
@@ -317,7 +369,7 @@ export class SessionService {
       }
       
       // Take a screenshot if configured
-      if (this.configService.areScreenshotsEnabled) {
+      if (this.configService.areScreenshotsEnabled && !page.isClosed?.()) {
         try {
           // Create a page-specific filename with timestamp and sanitized URL
           const timestamp = Date.now();
