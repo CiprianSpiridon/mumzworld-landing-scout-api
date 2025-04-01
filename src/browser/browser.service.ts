@@ -39,6 +39,20 @@ export class BrowserService implements OnModuleDestroy {
       await this.initialize();
     }
 
+    // If browser closed unexpectedly, reinitialize it
+    try {
+      // Check if browser is connected
+      if (this.browser && !this.browser.isConnected()) {
+        this.logger.warn('Browser disconnected, reinitializing...');
+        this.browser = null;
+        await this.initialize();
+      }
+    } catch (error) {
+      this.logger.warn(`Browser check failed, reinitializing: ${(error as Error).message}`);
+      this.browser = null;
+      await this.initialize();
+    }
+
     // Check if browser is still null after initialization (shouldn't happen, but TypeScript wants it)
     if (!this.browser) {
       throw new Error('Failed to initialize browser');
@@ -50,20 +64,60 @@ export class BrowserService implements OnModuleDestroy {
       acceptDownloads: false,
       bypassCSP: true,
       ignoreHTTPSErrors: true,
+      // Add performance-related options
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      javaScriptEnabled: true,
+      isMobile: false,
+      // Configure resource handling
+      httpCredentials: undefined, // Don't pass auth credentials
     });
+  }
+
+  /**
+   * Check if a page is valid and usable
+   */
+  isPageValid(page: any): boolean {
+    if (!page) return false;
+    
+    try {
+      // Check if the page is closed
+      if (page.isClosed?.()) return false;
+      
+      // For additional checks, we could test if we can access page properties
+      return true;
+    } catch (error) {
+      this.logger.warn(`Error checking page validity: ${(error as Error).message}`);
+      return false;
+    }
   }
 
   /**
    * Create a new page with a new context
    */
   async createPage(): Promise<{ page: Page; context: BrowserContext }> {
-    const context = await this.createContext();
-    const page = await context.newPage();
-    
-    // Set default timeout for navigation and actions
-    page.setDefaultTimeout(this.configService.playwrightConfig.timeout);
-    
-    return { page, context };
+    try {
+      const context = await this.createContext();
+      const page = await context.newPage();
+      
+      // Set default timeout for navigation and actions
+      page.setDefaultTimeout(this.configService.playwrightConfig.timeout);
+      
+      return { page, context };
+    } catch (error) {
+      // If page creation fails, try to reinitialize browser and try again
+      this.logger.warn(`Page creation failed, reinitializing browser: ${(error as Error).message}`);
+      this.browser = null;
+      await this.initialize();
+      
+      const context = await this.createContext();
+      const page = await context.newPage();
+      
+      // Set default timeout for navigation and actions
+      page.setDefaultTimeout(this.configService.playwrightConfig.timeout);
+      
+      return { page, context };
+    }
   }
 
   /**

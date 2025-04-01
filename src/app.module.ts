@@ -8,6 +8,7 @@ import { SessionsModule } from './sessions/sessions.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { BrowserModule } from './browser/browser.module';
 import { DatabaseModule } from './database/database.module';
+import { ExportsModule } from './exports/exports.module';
 import configuration from './common/config/configuration';
 
 @Module({
@@ -29,6 +30,7 @@ import configuration from './common/config/configuration';
     SessionsModule,
     SchedulerModule,
     ApiModule,
+    ExportsModule,
   ],
 })
 export class AppModule {}

@@ -48,9 +48,21 @@ export class SchedulerService implements OnModuleInit {
       // Get all active scouts
       const scouts = await this.scoutService.findActive();
 
+      // Get currently running sessions
+      const runningSessions = await this.sessionService.findRunning();
+      
+      // Calculate how many more scouts we can run
+      const maxConcurrentScouts = this.configService.maxConcurrentScouts;
+      const availableSlots = Math.max(0, maxConcurrentScouts - runningSessions.length);
+      
+      if (availableSlots <= 0) {
+        this.logger.log(`Maximum concurrent scouts (${maxConcurrentScouts}) already running. Skipping schedule check.`);
+        return;
+      }
+
       // Check if any scouts need to be run
       const now = new Date();
-      const scoutsToRun = scouts.filter((scout) => {
+      let scoutsToRun = scouts.filter((scout) => {
         // Skip scouts without a next run time
         if (!scout.nextRunAt) {
           return false;
@@ -59,6 +71,12 @@ export class SchedulerService implements OnModuleInit {
         // Check if the next run time is in the past
         return scout.nextRunAt <= now;
       });
+      
+      // Limit to available slots
+      if (scoutsToRun.length > availableSlots) {
+        this.logger.log(`Limiting scheduled scouts to ${availableSlots} concurrent executions.`);
+        scoutsToRun = scoutsToRun.slice(0, availableSlots);
+      }
 
       // Start sessions for scouts that need to be run
       for (const scout of scoutsToRun) {

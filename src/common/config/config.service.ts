@@ -33,6 +33,10 @@ export class ConfigService {
     return this.configService.get('scheduler') || {};
   }
 
+  get maxConcurrentScouts(): number {
+    return this.configService.get<number>('scheduler.maxConcurrentScouts') || 10;
+  }
+
   get playwrightConfig(): Record<string, any> {
     return this.configService.get('playwright') || {};
   }

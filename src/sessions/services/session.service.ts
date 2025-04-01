@@ -42,16 +42,40 @@ export class SessionService {
   }
 
   /**
+   * Get all currently running sessions
+   */
+  async findRunning(): Promise<ScoutingSession[]> {
+    return this.sessionRepository.find({
+      where: { status: SessionStatus.RUNNING },
+      order: { startTime: 'ASC' },
+    });
+  }
+
+  /**
    * Get a session by ID
    */
   async findOne(id: string): Promise<ScoutingSession> {
     const session = await this.sessionRepository.findOne({
       where: { id },
-      relations: ['scout', 'pageResults'],
+      relations: { scout: true },
     });
 
     if (!session) {
       throw new NotFoundException(`Session with ID "${id}" not found`);
+    }
+
+    // For running sessions, calculate the totalPagesScanned based on all page results
+    if (session.status === SessionStatus.RUNNING) {
+      // Count all page results
+      const allResults = await this.pageResultRepository.count({
+        where: { sessionId: id },
+      });
+
+      // Update totalPagesScanned with the total number of processed pages
+      if (allResults > session.totalPagesScanned) {
+        session.totalPagesScanned = allResults;
+        await this.sessionRepository.save(session);
+      }
     }
 
     return session;
@@ -87,6 +111,7 @@ export class SessionService {
 
     // Save the session to get an ID
     const savedSession = await this.sessionRepository.save(session);
+    this.logger.log(`Created session with ID ${savedSession.id}`);
 
     // Initialize the URL queue for this session
     this.urlQueue[savedSession.id] = [];
@@ -129,10 +154,13 @@ export class SessionService {
     const startTime = Date.now();
     let page: any = null;
     let context: any = null;
+    let pagesScanned = 0; // Counter for successfully scanned pages
 
     try {
       // Get the session and scout
       const session = await this.findOne(sessionId);
+      this.logger.log(`Starting session for scout ${session.scoutId} with session ID ${session.id}`);
+      
       const scout = await this.scoutService.findOne(session.scoutId);
 
       // Create screenshots directory for this session if needed
@@ -160,11 +188,23 @@ export class SessionService {
         // Auto-scroll to load dynamic content
         await autoScroll(page);
 
-        // Process the starting URL
-        await this.processUrl(page, scout.startUrl, session, scout);
-
-        // Get the list of visited URLs to avoid duplicates
+        // Initialize visited URLs set
         const visitedUrls = new Set<string>([scout.startUrl]);
+
+        // Process the starting URL
+        try {
+          const result = await this.processUrl(page, scout.startUrl, session, scout);
+          if (result && result.status === PageResultStatus.SUCCESS) {
+            pagesScanned++;
+            
+            // Update the session with the count of successfully processed pages
+            session.totalPagesScanned = pagesScanned;
+            await this.sessionRepository.save(session);
+          }
+        } catch (startUrlError) {
+          this.logger.error(`Failed to process starting URL: ${startUrlError instanceof Error ? startUrlError.message : 'unknown error'}`);
+          // Continue anyway to extract links if possible
+        }
 
         // Extract links from the page
         const links = await extractLinks(page, []);
@@ -180,10 +220,12 @@ export class SessionService {
           visitedUrls.size < maxPages &&
           this.urlQueue[sessionId]?.length > 0
         ) {
+          // Refresh our session reference to ensure it's valid
+          const currentSession = await this.findOne(sessionId);
+          
           // Check if session was cancelled
-          const updatedSession = await this.findOne(sessionId);
-          if (updatedSession.status === SessionStatus.CANCELLED) {
-            session.status = SessionStatus.CANCELLED;
+          if (currentSession.status === SessionStatus.CANCELLED) {
+            await this.sessionRepository.save(currentSession);
             break;
           }
           
@@ -201,12 +243,23 @@ export class SessionService {
           
           // Process the URL - wrap in try/catch to continue even if one URL fails
           try {
-            const result = await this.processUrl(page, nextUrl, session, scout);
+            if (!currentSession || !currentSession.id) {
+              throw new Error(`Invalid session: missing session ID for ${sessionId}`);
+            }
+            
+            const result = await this.processUrl(page, nextUrl, currentSession, scout);
+            
             // If a new page and context were created in processUrl, update our references
             if (result.newPage) {
               page = result.newPage;
               context = result.newContext;
             }
+            
+            // Increment pages scanned regardless of success or failure
+            pagesScanned++;
+            currentSession.totalPagesScanned = pagesScanned;
+            await this.sessionRepository.save(currentSession);
+            this.logger.log(`Updated totalPagesScanned to ${pagesScanned} for session ${sessionId}`);
           } catch (urlError) {
             this.logger.error(`Failed to process URL ${nextUrl}: ${urlError instanceof Error ? urlError.message : 'unknown error'}`);
             // Continue with next URL
@@ -228,20 +281,21 @@ export class SessionService {
           }
         }
         
-        // Update the session status
-        session.status = SessionStatus.COMPLETED;
-        session.endTime = new Date();
-        session.totalPagesScanned = visitedUrls.size;
+        // Update the session status at the end of processing
+        const finalSession = await this.findOne(sessionId);
+        finalSession.status = SessionStatus.COMPLETED;
+        finalSession.endTime = new Date();
+        finalSession.totalPagesScanned = pagesScanned;
         
         // Save the updated session
-        await this.sessionRepository.save(session);
+        await this.sessionRepository.save(finalSession);
         
         // Update the scout's last run time
         await this.scoutService.updateLastRun(scout.id);
       } finally {
-        // Add a small delay before closing the browser to ensure all operations complete
+        // Shorter delay before closing the browser
         try {
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 1000ms to 500ms
           if (page && context) {
             await this.browserService.closePage(page, context);
           }
@@ -257,6 +311,7 @@ export class SessionService {
       const session = await this.findOne(sessionId);
       session.status = SessionStatus.FAILED;
       session.endTime = new Date();
+      session.totalPagesScanned = pagesScanned; // Ensure we save any pages that were scanned
       
       if (error instanceof Error) {
         session.errorMessage = error.message;
@@ -302,37 +357,54 @@ export class SessionService {
     let context: any = null;
     let createdNewPage = false;
     
-    // Create a page result entry
+    // Validate session and get a fresh reference
+    if (!session || !session.id) {
+      throw new Error(`Invalid session: session is null or missing ID`);
+    }
+    
+    // Create a page result entry with valid sessionId
     const pageResult = this.pageResultRepository.create({
-      sessionId: session.id,
+      sessionId: session.id, // Use the provided session ID directly
       url,
       scanTime: new Date(),
       status: PageResultStatus.SUCCESS,
+      processingTimeMs: 0, // Initialize with 0, will be updated in finally block
     });
     
     try {
       this.logger.log(`Processing URL: ${url}`);
       
       // Check if the page is still valid before continuing
-      if (!page || page.isClosed?.()) {
-          this.logger.warn(`Page is closed, creating a new one for session ${session.id}`);
-          
-          let browser = await this.browserService.createPage();
+      if (!this.browserService.isPageValid(page)) {
+        this.logger.warn(`Page is invalid or closed, creating a new one for session ${session.id}`);
+        
+        try {
+          const browser = await this.browserService.createPage();
           page = browser.page;
           context = browser.context;
           createdNewPage = true;
+        } catch (browserError) {
+          this.logger.error(`Failed to create new page: ${browserError instanceof Error ? browserError.message : 'unknown error'}`);
+          pageResult.status = PageResultStatus.ERROR;
+          pageResult.errorMessage = `Failed to create browser page: ${browserError instanceof Error ? browserError.message : 'unknown error'}`;
+          await this.pageResultRepository.save(pageResult);
+          return Object.assign(pageResult, { newPage: null, newContext: null });
+        }
       }
       
       // Navigate to the URL with better error handling
       try {
         await page.goto(url, { 
           waitUntil: 'domcontentloaded',
-          timeout: scout.timeout || 30000
+          timeout: Math.min(15000, scout.timeout || 30000)
         });
       } catch (navError) {
         this.logger.error(`Navigation error for ${url}: ${navError.message}`);
         pageResult.status = PageResultStatus.ERROR;
         pageResult.errorMessage = `Navigation failed: ${navError.message}`;
+        
+        // Save the page result even if navigation failed
+        await this.pageResultRepository.save(pageResult);
         
         if (createdNewPage) {
           return Object.assign(pageResult, { newPage: page, newContext: context });
@@ -340,122 +412,147 @@ export class SessionService {
         return pageResult;
       }
       
-      // Wait for content to load and scroll to load dynamic content
+      // Let's wrap all page operations in try/catch to handle any potential browser closure
       try {
-        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {
+        // Wait for content to load and scroll to load dynamic content
+        await page.waitForLoadState('networkidle', { 
+          timeout: Math.min(3000, scout.timeout || 3000)  // Reduced from 5000ms to 3000ms max
+        }).catch(() => {
           this.logger.warn(`Network idle timeout for ${url}`);
         });
       
-        // Use longer delay for homepage (startUrl) to ensure all content loads
+        // Use shorter delays for homepage scrolling
         const isHomepage = url === scout.startUrl;
-        const scrollDelay = isHomepage ? 500 : 100;
-        const finalTimeout = isHomepage ? 10000 : 1000;
+        const scrollDelay = isHomepage ? 200 : 50; // Reduced from 500/100 to 200/50
+        const finalTimeout = isHomepage ? 10000 : 500; // Reduced from 10000/1000 to 5000/500
       
         await autoScroll(page, 100, scrollDelay, 50, finalTimeout);
-      } catch (loadError) {
-        this.logger.warn(`Content loading error for ${url}: ${loadError.message}`);
-        // Continue despite this error - we might still be able to extract information
-      }
       
-      // First, identify the page type
-      const identifiedPageType = await this.processorService.identifyPageType(page, scout.pageTypes);
+        // First, identify the page type
+        const identifiedPageType = await this.processorService.identifyPageType(page, scout.pageTypes);
       
-      if (identifiedPageType) {
-        // Process the page to get product count
-        const pageTypeResult = await this.processorService.processPage(
-          page, 
-          url,
-          identifiedPageType
-        );
-        
-        if (pageTypeResult) {
-          // Found a matching page type
-          pageResult.pageType = pageTypeResult.pageType || 'UNKNOWN';
-          pageResult.productCount = pageTypeResult.productCount || 0;
-          pageResult.status = PageResultStatus.SUCCESS;
-          this.logger.log(`Found ${pageResult.productCount} products on ${url} (${pageResult.pageType})`);
-        } else {
-          // Processing failed
-          pageResult.pageType = identifiedPageType.type || 'UNKNOWN';
-          pageResult.productCount = 0;
-          pageResult.status = PageResultStatus.ERROR;
-          pageResult.errorMessage = 'Failed to process page content';
-        }
-      } else {
-        // Unknown page type
-        pageResult.pageType = 'UNKNOWN';
-        pageResult.status = PageResultStatus.ERROR;
-        pageResult.errorMessage = 'Unknown page type';
-      }
-      
-      // Take a screenshot if configured
-      if (this.configService.areScreenshotsEnabled && !page.isClosed?.()) {
-        try {
-          // Create a page-specific filename with timestamp and sanitized URL
-          const timestamp = Date.now();
-          const sanitizedUrl = url.replace(/[^a-z0-9]/gi, '_').substring(0, 100);
-          const filename = `${timestamp}_${sanitizedUrl}.png`;
+        if (identifiedPageType) {
+          // Process the page to get product count
+          const pageTypeResult = await this.processorService.processPage(
+            page, 
+            url,
+            identifiedPageType
+          );
           
-          // Save to the session-specific directory
-          const screenshotPath = join(this.getSessionScreenshotsDirectory(session.id), filename);
+          if (pageTypeResult) {
+            // Found a matching page type
+            pageResult.pageType = pageTypeResult.pageType || 'UNKNOWN';
+            pageResult.productCount = pageTypeResult.productCount || 0;
+            pageResult.status = PageResultStatus.SUCCESS;
+            this.logger.log(`Found ${pageResult.productCount} products on ${url} (${pageResult.pageType})`);
+          } else {
+            // Processing failed
+            pageResult.pageType = identifiedPageType.type || 'UNKNOWN';
+            pageResult.productCount = 0;
+            pageResult.status = PageResultStatus.ERROR;
+            pageResult.errorMessage = 'Failed to process page content';
+          }
+        } else {
+          // Unknown page type
+          pageResult.pageType = 'UNKNOWN';
+          pageResult.status = PageResultStatus.ERROR;
+          pageResult.errorMessage = 'Unknown page type';
+        }
+      } catch (pageProcessError) {
+        // Handle any errors that occur during page processing
+        this.logger.error(`Error processing page content for ${url}: ${pageProcessError instanceof Error ? pageProcessError.message : 'unknown error'}`);
+        pageResult.status = PageResultStatus.ERROR;
+        pageResult.errorMessage = `Page processing error: ${pageProcessError instanceof Error ? pageProcessError.message : 'unknown error'}`;
+      }
+      
+      // Try to take a screenshot if enabled
+      if (this.configService.areScreenshotsEnabled) {
+        try {
+          // Create a unique filename based on timestamp and URL
+          const timestamp = Date.now();
+          const urlSafeFilename = url.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 100);
+          const filename = `${timestamp}_${urlSafeFilename}.png`;
+          const screenshotDir = `${this.configService.screenshotsDir}/${session.id}`;
+          const screenshotPath = `${screenshotDir}/${filename}`;
           
           await page.screenshot({ path: screenshotPath, fullPage: true });
           
-          // Store relative path in the database for easier access
-          const relativeScreenshotPath = screenshotPath.replace(this.configService.screenshotsDir, '');
-          pageResult.screenshotPath = relativeScreenshotPath;
-        } catch (error) {
-          if (error instanceof Error) {
-            this.logger.warn(`Failed to take screenshot: ${error.message}`);
-          }
+          // Store relative path in the database
+          pageResult.screenshotPath = `screenshots/${session.id}/${filename}`;
+        } catch (screenshotError) {
+          this.logger.warn(`Failed to capture screenshot for ${url}: ${screenshotError instanceof Error ? screenshotError.message : 'unknown error'}`);
+          // Don't fail the whole process due to screenshot failure
         }
       }
       
+      // Get HTML snapshot if enabled
+      if (this.configService.isHtmlSnapshotEnabled) {
+        try {
+          pageResult.htmlSnapshot = await page.content();
+        } catch (htmlError) {
+          this.logger.warn(
+            `Failed to capture HTML for ${url}: ${htmlError instanceof Error ? htmlError.message : 'unknown error'}`,
+          );
+          // Don't fail the whole process due to HTML capture failure
+        }
+      }
     } catch (error) {
-      // Handle errors during page processing
+      // Handle any other unexpected errors
+      this.logger.error(
+        `Unexpected error processing ${url}: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
       pageResult.status = PageResultStatus.ERROR;
-      
-      if (error instanceof Error) {
-        pageResult.errorMessage = error.message;
-        this.logger.error(`Error processing ${url}: ${error.message}`);
-      } else {
-        pageResult.errorMessage = 'Unknown error';
-        this.logger.error(`Error processing ${url}: Unknown error`);
-      }
+      pageResult.errorMessage = `Unexpected error: ${error instanceof Error ? error.message : 'unknown error'}`;
     } finally {
-      // Calculate processing time
+      // Record the processing time
       pageResult.processingTimeMs = Date.now() - startTime;
-      
-      // Save the page result and return with the new page/context if created
-      const savedResult = await this.pageResultRepository.save(pageResult);
-      if (createdNewPage) {
-        return Object.assign(savedResult, { newPage: page, newContext: context });
+
+      // Save the page result
+      try {
+        await this.pageResultRepository.save(pageResult);
+      } catch (saveError) {
+        this.logger.error(
+          `Failed to save page result for ${url}: ${saveError instanceof Error ? saveError.message : 'unknown error'}`,
+        );
       }
-      return savedResult;
     }
+
+    // Return the result, including any new page and context references
+    return Object.assign(
+      pageResult,
+      createdNewPage
+        ? {
+            newPage: page,
+            newContext: context,
+      } : {},
+    );
   }
-  
+
   /**
    * Create a directory for storing screenshots for a specific session
    */
-  private async createSessionScreenshotsDirectory(sessionId: string): Promise<void> {
+  private async createSessionScreenshotsDirectory(
+    sessionId: string,
+  ): Promise<void> {
     try {
       const dirPath = this.getSessionScreenshotsDirectory(sessionId);
-      
+
       // Create parent screenshots directory if it doesn't exist
       await fs.mkdir(this.configService.screenshotsDir, { recursive: true });
-      
+
       // Create session-specific directory
       await fs.mkdir(dirPath, { recursive: true });
-      
+
       this.logger.log(`Created screenshots directory for session ${sessionId}`);
     } catch (error) {
       if (error instanceof Error) {
-        this.logger.error(`Failed to create screenshots directory: ${error.message}`);
+        this.logger.error(
+          `Failed to create screenshots directory: ${error.message}`,
+        );
       }
     }
   }
-  
+
   /**
    * Get the path to the screenshots directory for a specific session
    */

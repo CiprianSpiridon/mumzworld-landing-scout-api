@@ -20,6 +20,7 @@ export default () => ({
       process.env.SCHEDULER_CHECK_INTERVAL || '60000',
       10,
     ),
+    maxConcurrentScouts: parseInt(process.env.MAX_CONCURRENT_SCOUTS || '2', 10),
   },
 
   // Playwright
